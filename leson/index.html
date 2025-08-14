@@ -1,0 +1,484 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Mini Mario (HTML5 Canvas)</title>
+  <style>
+    :root {
+      --bg: #87ceeb; /* sky */
+      --ground: #3b2f2f;
+      --grass: #5cb85c;
+      --player: #ff4136;
+      --coin: #ffd700;
+      --enemy: #2c3e50;
+      --platform: #8b5a2b;
+      --flag: #ffffff;
+      --flagpole: #444;
+    }
+    html, body {
+      height: 100%;
+      margin: 0;
+      background: #0f172a;
+      color: #e2e8f0;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Ubuntu, Cantarell, Noto Sans, Helvetica, Arial, "Apple Color Emoji", "Segoe UI Emoji";
+      user-select: none;
+    }
+    .wrap {
+      max-width: 980px;
+      margin: 0 auto;
+      padding: 12px;
+      display: grid;
+      gap: 10px;
+    }
+    header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    .btn {
+      background: #1f2937;
+      border: 1px solid #334155;
+      padding: 8px 12px;
+      border-radius: 10px;
+      cursor: pointer;
+      color: #e5e7eb;
+    }
+    .btn:hover { filter: brightness(1.1); }
+    #game {
+      width: 100%;
+      height: auto;
+      background: var(--bg);
+      border-radius: 16px;
+      box-shadow: 0 10px 30px rgba(0,0,0,.35);
+      display: block;
+    }
+    .help {
+      font-size: 14px;
+      line-height: 1.5;
+      background: #0b1220;
+      border: 1px solid #1f2a44;
+      padding: 10px 12px;
+      border-radius: 12px;
+    }
+    .kbd {
+      background:#111827; border:1px solid #374151; padding:2px 6px; border-radius:6px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1 style="margin:0">Mini Mario (HTML5)</h1>
+      <div>
+        <button id="btnPause" class="btn" title="Пауза / Продовжити (P)">⏯ Пауза</button>
+        <button id="btnReset" class="btn" title="Перезапустити рівень (R)">🔄 Перезапуск</button>
+      </div>
+    </header>
+    <canvas id="game" width="960" height="540"></canvas>
+    <div class="help">
+      Керування: <span class="kbd">←</span>/<span class="kbd">A</span> вліво, <span class="kbd">→</span>/<span class="kbd">D</span> вправо, стрибок <span class="kbd">↑</span>/<span class="kbd">W</span>/<span class="kbd">Пробіл</span>.
+      Перезапуск — <span class="kbd">R</span>, Пауза — <span class="kbd">P</span>.
+      Зберіть монети, уникайте ворогів, дійдіть до прапора!
+    </div>
+  </div>
+  <script>
+  // ==== Simple Mario-like platformer (vanilla JS, single-file) ====
+  // Author: You + ChatGPT. No assets, just shapes. Works offline.
+
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+
+  // --- Game constants
+  const GRAVITY = 0.9;            // гравітація
+  const MOVE_SPEED = 4.2;         // швидкість бігу
+  const JUMP_VELOCITY = 16.5;     // початкова швидкість стрибка
+  const FRICTION = 0.85;          // тертя по землі
+  const AIR_DRAG = 0.95;          // у повітрі
+
+  const WORLD = { w: 6000, h: 1200 }; // розмір світу
+
+  // --- Input
+  const keys = new Set();
+  addEventListener('keydown', (e) => {
+    keys.add(e.code);
+    if (["ArrowUp","Space","KeyW"].includes(e.code)) e.preventDefault();
+  });
+  addEventListener('keyup', (e) => keys.delete(e.code));
+
+  // --- Camera (now follows Y too, so видно персонажів)
+  const camera = { x: 0, y: 0, lerp: 0.15 };
+
+  // --- Level geometry (platform rectangles)
+  // Each platform: {x,y,w,h}
+  const groundY = 900;
+  const platforms = [
+    // Ground segments
+    {x:0, y:groundY, w: 2500, h: 80},
+    {x:2600, y:groundY-20, w: 1200, h: 100},
+    {x:3900, y:groundY, w: 2100, h: 80},
+
+    // Floating platforms / steps
+    {x: 600, y: 780, w: 200, h: 20},
+    {x: 900, y: 660, w: 220, h: 20},
+    {x: 1200, y: 540, w: 220, h: 20},
+    {x: 1500, y: 540, w: 160, h: 20},
+    {x: 1850, y: 660, w: 260, h: 20},
+    {x: 2250, y: 540, w: 200, h: 20},
+
+    {x: 2850, y: 780, w: 220, h: 20},
+    {x: 3150, y: 660, w: 220, h: 20},
+    {x: 3450, y: 540, w: 220, h: 20},
+
+    {x: 4050, y: 780, w: 200, h: 20},
+    {x: 4300, y: 660, w: 220, h: 20},
+    {x: 4550, y: 540, w: 220, h: 20},
+  ];
+
+  // Coins
+  function coin(x, y) { return {x, y, r: 12, taken:false, bounce: 0}; }
+  const coins = [];
+  [650, 930, 1230, 1510, 1880, 2280, 2880, 3180, 3480, 4080, 4330, 4580].forEach((x,i)=>{
+    const y = platforms[i+3] ? platforms[i+3].y - 28 : groundY - 40;
+    coins.push(coin(x + 100, y));
+  });
+
+  // Enemies – simple goombas (patrol left/right)
+  function enemy(x, y, range=140, speed=1.2){
+    return { x, y, w: 36, h: 28, dir: 1, speed, min:x-range, max:x+range, alive:true };
+  }
+  const enemies = [
+    enemy(1050, groundY-28),
+    enemy(2000, groundY-28, 180, 1.4),
+    enemy(3000, groundY-28, 160, 1.5),
+    enemy(4200, groundY-28, 200, 1.7),
+  ];
+
+  // Flag (win)
+  const flag = { x: WORLD.w - 200, y: groundY - 220, w: 12, h: 220 };
+
+  // Player
+  const playerSpawn = { x: 80, y: groundY - 60 };
+  const player = {
+    x: playerSpawn.x,
+    y: playerSpawn.y,
+    w: 32,
+    h: 46,
+    vx: 0,
+    vy: 0,
+    coins: 0,
+    onGround: false,
+    alive: true,
+    invuln: 0,
+  };
+
+  let paused = false;
+  let won = false;
+
+  // UI buttons
+  document.getElementById('btnPause').onclick = () => { paused = !paused; };
+  document.getElementById('btnReset').onclick = reset;
+  addEventListener('keydown', (e)=>{
+    if(e.code === 'KeyP') paused = !paused;
+    if(e.code === 'KeyR') reset();
+  });
+
+  function reset(){
+    player.x = playerSpawn.x; player.y = playerSpawn.y;
+    player.vx = 0; player.vy = 0; player.coins = 0;
+    player.alive = true; player.invuln = 0; won = false; paused = false;
+    coins.forEach(c=>{ c.taken = false; c.bounce = 0; });
+    enemies.forEach(en=>{ en.alive = true; });
+    // Put camera near ground at start
+    camera.x = Math.max(0, Math.min(player.x - canvas.width * 0.45, WORLD.w - canvas.width));
+    camera.y = Math.max(0, Math.min(player.y - canvas.height * 0.6, WORLD.h - canvas.height));
+  }
+
+  // --- Helpers
+  function rectsIntersect(a,b){
+    return a.x < b.x + b.w && a.x + a.w > b.x && a.y < b.y + b.h && a.y + a.h > b.y;
+  }
+
+  function applyPhysics(entity){
+    // Horizontal input
+    const left = keys.has('ArrowLeft') || keys.has('KeyA');
+    const right = keys.has('ArrowRight') || keys.has('KeyD');
+    if (left) entity.vx -= 0.6;
+    if (right) entity.vx += 0.6;
+
+    // Air/ground drag
+    if (entity.onGround) entity.vx *= FRICTION; else entity.vx *= AIR_DRAG;
+
+    // Clamp speed
+    entity.vx = Math.max(Math.min(entity.vx, MOVE_SPEED), -MOVE_SPEED);
+
+    // Gravity
+    entity.vy += GRAVITY;
+
+    // Jump
+    const wantJump = keys.has('ArrowUp') || keys.has('Space') || keys.has('KeyW');
+    if (wantJump && entity.onGround) {
+      entity.vy = -JUMP_VELOCITY;
+      entity.onGround = false;
+    }
+
+    // Apply velocity with collision resolution
+    // Move X
+    entity.x += entity.vx;
+    for (const p of platforms){
+      if (rectsIntersect(entity, p)){
+        if (entity.vx > 0) entity.x = p.x - entity.w; else entity.x = p.x + p.w;
+        entity.vx = 0;
+      }
+    }
+
+    // Move Y
+    entity.y += entity.vy;
+    entity.onGround = false;
+    for (const p of platforms){
+      if (rectsIntersect(entity, p)){
+        if (entity.vy > 0) { // falling
+          entity.y = p.y - entity.h;
+          entity.onGround = true;
+        } else { // going up
+          entity.y = p.y + p.h;
+        }
+        entity.vy = 0;
+      }
+    }
+
+    // World bounds
+    if (entity.x < 0) { entity.x = 0; entity.vx = 0; }
+    if (entity.x + entity.w > WORLD.w) { entity.x = WORLD.w - entity.w; entity.vx = 0; }
+    if (entity.y > WORLD.h) killPlayer();
+  }
+
+  function killPlayer(){
+    if (player.invuln > 0) return;
+    player.alive = false;
+    // quick respawn
+    setTimeout(()=>{ reset(); }, 500);
+  }
+
+  // --- Game loop
+  let last = performance.now();
+  function loop(now){
+    requestAnimationFrame(loop);
+    const dt = (now - last) / 16.6667; // not heavily used but future-proof
+    last = now;
+    if (paused) { draw(true); return; }
+
+    // Update
+    if (!won && player.alive){
+      applyPhysics(player);
+
+      // Collect coins
+      for (const c of coins){
+        if (!c.taken){
+          const a = {x:c.x-12, y:c.y-12, w:24, h:24};
+          if (rectsIntersect(player, a)){
+            c.taken = true; player.coins++;
+          } else {
+            c.bounce += 0.15; // idle animation
+          }
+        }
+      }
+
+      // Enemies move & collide
+      for (const en of enemies){
+        if (!en.alive) continue;
+        en.x += en.speed * en.dir;
+        if (en.x < en.min) { en.x = en.min; en.dir = 1; }
+        if (en.x > en.max) { en.x = en.max; en.dir = -1; }
+        // Platform collision so enemies stay on ground
+        en.y = groundY - en.h; // simple ground walker
+
+        // Player vs enemy
+        if (rectsIntersect(player, en)){
+          // Stomp check
+          if (player.vy > 2 && player.y + player.h - en.y < 14){
+            en.alive = false; player.vy = -12; // bounce up
+          } else {
+            killPlayer();
+          }
+        }
+      }
+
+      // Win check (touch flag pole area)
+      if (player.x + player.w > flag.x - 8){
+        won = true;
+      }
+
+      // Invulnerability timer
+      if (player.invuln > 0) player.invuln -= dt;
+    }
+
+    draw(false);
+  }
+
+  function draw(pausedOverlay){
+    // Camera follows player on X and Y (lowered view)
+    const targetX = player.x - canvas.width * 0.45;
+    const targetY = player.y - canvas.height * 0.6; // 0.6 shows більше землі
+    camera.x += (targetX - camera.x) * camera.lerp;
+    camera.y += (targetY - camera.y) * camera.lerp;
+    camera.x = Math.max(0, Math.min(camera.x, WORLD.w - canvas.width));
+    camera.y = Math.max(0, Math.min(camera.y, WORLD.h - canvas.height));
+
+    ctx.save();
+    ctx.clearRect(0,0,canvas.width,canvas.height);
+
+    // Sky background
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--bg');
+    ctx.fillRect(0,0,canvas.width,canvas.height);
+
+    // Parallax clouds (simple)
+    const t = performance.now() * 0.00005;
+    ctx.fillStyle = 'rgba(255,255,255,0.8)';
+    for(let i=0;i<12;i++){
+      const cx = ((i*500 + t*600) % (WORLD.w)) - camera.x*0.5;
+      const cy = 100 + (i%3)*60; // sky stays up; no need to offset with camera.y
+      drawCloud(cx, cy);
+    }
+
+    // World transform
+    ctx.translate(-camera.x, -camera.y);
+
+    // Ground/platforms
+    for (const p of platforms){ drawPlatform(p); }
+
+    // Flag
+    drawFlag(flag);
+
+    // Coins
+    for (const c of coins){ if (!c.taken) drawCoin(c); }
+
+    // Enemies
+    for (const en of enemies){ if (en.alive) drawEnemy(en); }
+
+    // Player
+    drawPlayer(player);
+
+    ctx.restore();
+
+    // HUD
+    drawHUD(pausedOverlay);
+  }
+
+  function drawPlatform(p){
+    const g = ctx.createLinearGradient(0, p.y, 0, p.y+p.h);
+    g.addColorStop(0, '#6d4c41');
+    g.addColorStop(1, '#3e2723');
+    ctx.fillStyle = g;
+    ctx.fillRect(p.x, p.y, p.w, p.h);
+    // grass top
+    ctx.fillStyle = '#3cb371';
+    ctx.fillRect(p.x, p.y-8, p.w, 8);
+  }
+
+  function drawPlayer(pl){
+    ctx.save();
+    // body
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--player');
+    ctx.fillRect(pl.x, pl.y, pl.w, pl.h);
+    // hat
+    ctx.fillStyle = '#c81e1e';
+    ctx.fillRect(pl.x-2, pl.y-10, pl.w+4, 10);
+    // eye
+    ctx.fillStyle = '#000';
+    ctx.fillRect(pl.x+pl.w-10, pl.y+12, 4, 4);
+    ctx.restore();
+  }
+
+  function drawEnemy(en){
+    ctx.save();
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--enemy');
+    ctx.fillRect(en.x, en.y, en.w, en.h);
+    // little eyes
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(en.x+8, en.y+8, 4,4);
+    ctx.fillRect(en.x+en.w-12, en.y+8, 4,4);
+    ctx.restore();
+  }
+
+  function drawCoin(c){
+    ctx.save();
+    ctx.translate(c.x, c.y + Math.sin(c.bounce)*4);
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--coin');
+    ctx.beginPath();
+    ctx.arc(0,0,c.r,0,Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.fillRect(-3,-10,6,20); // shine
+    ctx.restore();
+  }
+
+  function drawFlag(f){
+    // pole
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--flagpole');
+    ctx.fillRect(f.x, f.y, f.w, f.h);
+    // flag cloth
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--flag');
+    const wave = Math.sin(performance.now()*0.006)*6;
+    ctx.beginPath();
+    ctx.moveTo(f.x+f.w, f.y+12);
+    ctx.lineTo(f.x+f.w+60, f.y+12+wave);
+    ctx.lineTo(f.x+f.w+60, f.y+52+wave*0.6);
+    ctx.lineTo(f.x+f.w, f.y+52);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function drawCloud(x, y){
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.beginPath();
+    ctx.arc(0,0,24,0,Math.PI*2);
+    ctx.arc(24,8,30,0,Math.PI*2);
+    ctx.arc(54,0,24,0,Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawHUD(pausedOverlay){
+    ctx.save();
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.fillRect(10,10,180,60);
+    ctx.fillStyle = '#fff';
+    ctx.font = '16px ui-monospace, Menlo, Consolas, monospace';
+    ctx.fillText(`COINS: ${player.coins}`, 22, 36);
+
+    const dist = Math.max(0, Math.floor(((flag.x - player.x) / WORLD.w) * 100));
+    ctx.fillText(`TO FLAG: ${dist}%`, 22, 58);
+
+    if (won){
+      drawCenterBanner('ПЕРЕМОГА! 🎉', '#16a34a');
+    } else if (!player.alive) {
+      drawCenterBanner('СМЕРТЬ! 💀', '#ef4444');
+    } else if (pausedOverlay) {
+      drawCenterBanner('ПАУЗА', '#0ea5e9');
+    }
+    ctx.restore();
+  }
+
+  function drawCenterBanner(text, bg){
+    const w = 420, h = 100;
+    ctx.save();
+    ctx.globalAlpha = 0.95;
+    ctx.fillStyle = bg;
+    ctx.fillRect(canvas.width/2 - w/2, canvas.height/3 - h/2, w, h);
+    ctx.fillStyle = '#fff';
+    ctx.font = '28px ui-monospace, Menlo, Consolas, monospace';
+    ctx.textAlign = 'center';
+    ctx.fillText(text, canvas.width/2, canvas.height/3 + 10);
+    ctx.font = '14px ui-monospace, Menlo, Consolas, monospace';
+    ctx.fillText('R — перезапуск   P — пауза', canvas.width/2, canvas.height/3 + 34);
+    ctx.restore();
+  }
+
+  // Start
+  reset();
+  requestAnimationFrame(loop);
+  </script>
+</body>
+</html>
